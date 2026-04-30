@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+import logging
+import shutil
+import tempfile
+from pathlib import Path
+
+from src.audio_processor import AudioProcessor
+from src.downloader import VideoDownloader, classify_url
+from src.models import AgentState, TranscriptSegment
+from src.transcriber import Transcriber
+
+log = logging.getLogger(__name__)
+
+
+class TranscriptionAgent:
+    def __init__(
+        self,
+        model_size: str = "large-v3",
+        device: str = "auto",
+        compute_type: str = "auto",
+        output_dir: str | None = None,
+        cookies_file: str | None = None,
+    ):
+        self._work_dir = Path(output_dir or tempfile.mkdtemp(prefix="transcriber_"))
+        self._downloader = VideoDownloader(
+            output_dir=str(self._work_dir), cookies_file=cookies_file
+        )
+        self._audio = AudioProcessor()
+        self._transcriber = Transcriber(
+            model_size=model_size, device=device, compute_type=compute_type
+        )
+
+    def transcribe(
+        self,
+        url: str,
+        language: str | None = None,
+        output_format: str = "text",
+    ) -> str:
+        state = AgentState(url=url, options={"language": language, "output_format": output_format})
+
+        log.info("Classifying URL: %s", url)
+        url_type = classify_url(url)
+        state.plan = {"url_type": url_type}
+
+        log.info("Downloading (%s)...", url_type)
+        download = self._downloader.download(url)
+
+        # Shortcut: use existing captions if present
+        if download.has_captions:
+            log.info("Using existing captions")
+            return _format_captions(download.captions, output_format)
+
+        state.media_path = download.path
+
+        log.info("Preparing audio...")
+        chunks = self._audio.prepare_audio(state.media_path)
+        state.chunks = chunks
+
+        log.info("Transcribing %d chunk(s)...", len(chunks))
+        segments = self._transcriber.transcribe_chunks(chunks, language=language)
+        state.segments = segments
+
+        log.info("Done. %d segments.", len(segments))
+        return _format_segments(segments, output_format)
+
+    def cleanup(self) -> None:
+        shutil.rmtree(self._work_dir, ignore_errors=True)
+
+
+def _format_segments(segments: list[TranscriptSegment], fmt: str) -> str:
+    if fmt == "srt":
+        return _to_srt(segments)
+    if fmt == "vtt":
+        return _to_vtt(segments)
+    if fmt == "json":
+        import json
+        return json.dumps(
+            [{"text": s.text, "start": s.start, "end": s.end} for s in segments],
+            indent=2,
+        )
+    # Default: plain text
+    return " ".join(s.text for s in segments).strip()
+
+
+def _to_srt(segments: list[TranscriptSegment]) -> str:
+    lines = []
+    for i, seg in enumerate(segments, start=1):
+        lines.append(str(i))
+        lines.append(f"{_srt_ts(seg.start)} --> {_srt_ts(seg.end)}")
+        lines.append(seg.text)
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _to_vtt(segments: list[TranscriptSegment]) -> str:
+    lines = ["WEBVTT", ""]
+    for seg in segments:
+        lines.append(f"{_vtt_ts(seg.start)} --> {_vtt_ts(seg.end)}")
+        lines.append(seg.text)
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _srt_ts(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds % 1) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _vtt_ts(seconds: float) -> str:
+    return _srt_ts(seconds).replace(",", ".")
+
+
+def _format_captions(captions: dict, fmt: str) -> str:
+    # Best-effort: return first available language as plain text
+    for lang_data in captions.values():
+        if isinstance(lang_data, list) and lang_data:
+            entry = lang_data[0]
+            if isinstance(entry, dict) and "url" in entry:
+                import urllib.request
+                with urllib.request.urlopen(entry["url"]) as resp:
+                    return resp.read().decode("utf-8")
+    return ""
