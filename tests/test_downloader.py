@@ -1,5 +1,74 @@
+import io
 import pytest
-from src.downloader import classify_url, is_media_url, parse_vtt, parse_json3
+from src.downloader import (
+    classify_url,
+    is_media_url,
+    parse_vtt,
+    parse_json3,
+    select_caption,
+    _stream_to_file,
+)
+
+
+class TestSelectCaption:
+    def test_prefers_manual_over_automatic(self):
+        info = {
+            "subtitles": {"en": [{"ext": "vtt", "url": "MANUAL"}]},
+            "automatic_captions": {"en": [{"ext": "json3", "url": "AUTO"}]},
+        }
+        url, ext, is_auto = select_caption(info, "en")
+        assert url == "MANUAL"
+        assert is_auto is False
+
+    def test_prefers_requested_language(self):
+        info = {"subtitles": {
+            "en": [{"ext": "vtt", "url": "EN"}],
+            "fr": [{"ext": "vtt", "url": "FR"}],
+        }}
+        url, _, _ = select_caption(info, "fr")
+        assert url == "FR"
+
+    def test_falls_back_to_first_language(self):
+        info = {"subtitles": {"de": [{"ext": "vtt", "url": "DE"}]}}
+        url, _, _ = select_caption(info, "en")
+        assert url == "DE"
+
+    def test_automatic_prefers_json3(self):
+        info = {"automatic_captions": {"en": [
+            {"ext": "vtt", "url": "VTT"},
+            {"ext": "json3", "url": "JSON3"},
+        ]}}
+        url, ext, is_auto = select_caption(info, "en")
+        assert ext == "json3"
+        assert is_auto is True
+
+    def test_manual_prefers_vtt(self):
+        info = {"subtitles": {"en": [
+            {"ext": "srt", "url": "SRT"},
+            {"ext": "vtt", "url": "VTT"},
+        ]}}
+        url, ext, _ = select_caption(info, "en")
+        assert ext == "vtt"
+
+    def test_no_captions_returns_none(self):
+        assert select_caption({}, "en") is None
+
+    def test_empty_caption_dicts_return_none(self):
+        assert select_caption({"subtitles": {}, "automatic_captions": {}}, "en") is None
+
+
+class TestStreamToFile:
+    def test_writes_content(self, tmp_path):
+        out = tmp_path / "f.bin"
+        src = io.BytesIO(b"hello world")
+        _stream_to_file(src, out, max_bytes=1024)
+        assert out.read_bytes() == b"hello world"
+
+    def test_raises_when_exceeds_cap(self, tmp_path):
+        out = tmp_path / "big.bin"
+        src = io.BytesIO(b"x" * 5000)
+        with pytest.raises(ValueError):
+            _stream_to_file(src, out, max_bytes=1000)
 
 
 class TestParseVtt:

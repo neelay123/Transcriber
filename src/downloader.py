@@ -1,14 +1,121 @@
 from __future__ import annotations
 
+import json
 import logging
-import subprocess
+import re
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
-from src.models import DownloadResult
+from src.models import DownloadResult, TranscriptSegment
 
 log = logging.getLogger(__name__)
+
+_VTT_TS = re.compile(r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})")
+_INLINE_TAG = re.compile(r"<[^>]+>")
+
+
+def parse_vtt(text: str) -> list[TranscriptSegment]:
+    """Parse well-formed WebVTT (manual subtitles) into segments.
+
+    Strips inline tags (`<c>`, `<00:00:01.000>`) and skips NOTE/STYLE/header
+    blocks. Not intended for YouTube rolling auto-captions — use json3 there.
+    """
+    segments: list[TranscriptSegment] = []
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        if "-->" in lines[i]:
+            ts = _VTT_TS.findall(lines[i])
+            if len(ts) >= 2:
+                start = _vtt_seconds(*ts[0])
+                end = _vtt_seconds(*ts[1])
+                i += 1
+                buf = []
+                while i < len(lines) and lines[i].strip() and "-->" not in lines[i]:
+                    buf.append(lines[i])
+                    i += 1
+                clean = _INLINE_TAG.sub("", " ".join(buf)).strip()
+                if clean:
+                    segments.append(
+                        TranscriptSegment(text=clean, start=start, end=end, confidence=1.0)
+                    )
+                continue
+        i += 1
+    return segments
+
+
+def _vtt_seconds(h: str, m: str, s: str, ms: str) -> float:
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+
+
+_MANUAL_EXT_PREF = ("vtt", "srt")
+_AUTO_EXT_PREF = ("json3", "srv3", "vtt")
+_MAX_DIRECT_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB cap on direct downloads
+
+
+def select_caption(
+    info: dict, preferred_lang: str | None
+) -> tuple[str, str, bool] | None:
+    """Pick the best caption track.
+
+    Returns (url, ext, is_auto) or None. Manual subtitles are preferred over
+    auto-generated; within a track, format preference favors a parseable
+    format (vtt for manual, json3 for auto).
+    """
+    for source_key, is_auto, ext_pref in (
+        ("subtitles", False, _MANUAL_EXT_PREF),
+        ("automatic_captions", True, _AUTO_EXT_PREF),
+    ):
+        source = info.get(source_key) or {}
+        if not source:
+            continue
+        lang = preferred_lang if preferred_lang in source else next(iter(source))
+        entries = source[lang]
+        if not entries:
+            continue
+        chosen = min(
+            entries,
+            key=lambda e: ext_pref.index(e["ext"]) if e["ext"] in ext_pref else 99,
+        )
+        return chosen["url"], chosen["ext"], is_auto
+    return None
+
+
+def _stream_to_file(resp, out_path, max_bytes: int = _MAX_DIRECT_BYTES) -> None:
+    """Stream a file-like response to disk, aborting if it exceeds max_bytes."""
+    written = 0
+    with open(out_path, "wb") as f:
+        while True:
+            chunk = resp.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > max_bytes:
+                f.close()
+                Path(out_path).unlink(missing_ok=True)
+                raise ValueError(
+                    f"Download exceeds {max_bytes} byte cap (aborted at {written})"
+                )
+            f.write(chunk)
+
+
+def parse_json3(data: dict) -> list[TranscriptSegment]:
+    """Parse YouTube json3 caption format into segments."""
+    segments: list[TranscriptSegment] = []
+    for event in data.get("events", []):
+        segs = event.get("segs")
+        if not segs:
+            continue
+        text = "".join(s.get("utf8", "") for s in segs).strip()
+        if not text:
+            continue
+        start = event.get("tStartMs", 0) / 1000.0
+        dur = event.get("dDurationMs", 0) / 1000.0
+        segments.append(
+            TranscriptSegment(text=text, start=start, end=start + dur, confidence=1.0)
+        )
+    return segments
 
 _YOUTUBE_DOMAINS = {"youtube.com", "www.youtube.com", "youtu.be", "m.youtube.com"}
 _VIMEO_DOMAINS = {"vimeo.com", "www.vimeo.com"}
@@ -48,13 +155,15 @@ class VideoDownloader:
         self.output_dir = Path(output_dir) if output_dir else Path(tempfile.gettempdir())
         self.cookies_file = cookies_file
 
-    def download(self, url: str) -> DownloadResult:
+    def download(
+        self, url: str, preferred_lang: str | None = None
+    ) -> DownloadResult:
         strategies = [self._try_ytdlp, self._try_direct_fetch]
         last_error: Exception | None = None
 
         for strategy in strategies:
             try:
-                result = strategy(url)
+                result = strategy(url, preferred_lang)
                 if result is not None:
                     return result
             except Exception as exc:
@@ -62,10 +171,12 @@ class VideoDownloader:
                 last_error = exc
 
         raise RuntimeError(
-            f"All download strategies failed for {url}"
+            f"All download strategies failed for {url}: {last_error}"
         ) from last_error
 
-    def _try_ytdlp(self, url: str) -> DownloadResult | None:
+    def _try_ytdlp(
+        self, url: str, preferred_lang: str | None = None
+    ) -> DownloadResult | None:
         import yt_dlp
 
         opts: dict = {
@@ -78,15 +189,32 @@ class VideoDownloader:
             opts["cookiefile"] = self.cookies_file
 
         with yt_dlp.YoutubeDL(opts) as ydl:
+            # Probe first (no media download) so the caption shortcut can
+            # skip a potentially huge video download entirely.
+            info = ydl.extract_info(url, download=False)
+
+            caption = select_caption(info, preferred_lang)
+            if caption is not None:
+                cap_url, ext, _is_auto = caption
+                raw = self._fetch_text(cap_url)
+                segments = (
+                    parse_json3(json.loads(raw))
+                    if ext == "json3"
+                    else parse_vtt(raw)
+                )
+                if segments:
+                    log.info("Using existing captions (%s, %s)", ext, len(segments))
+                    return DownloadResult(caption_segments=segments, metadata=info)
+
+            # No usable captions — download the media for transcription.
             info = ydl.extract_info(url, download=True)
+            path = ydl.prepare_filename(info)
 
-        # Check for existing captions — skip transcription entirely if available
-        captions = info.get("subtitles") or info.get("automatic_captions") or {}
-        path = ydl.prepare_filename(info)
+        return DownloadResult(path=path, metadata=info)
 
-        return DownloadResult(path=path, metadata=info, captions=captions)
-
-    def _try_direct_fetch(self, url: str) -> DownloadResult | None:
+    def _try_direct_fetch(
+        self, url: str, preferred_lang: str | None = None
+    ) -> DownloadResult | None:
         if not is_media_url(url):
             return None
 
@@ -95,5 +223,20 @@ class VideoDownloader:
         suffix = Path(urlparse(url).path).suffix or ".mp4"
         out = self.output_dir / f"direct_{abs(hash(url))}{suffix}"
 
-        urllib.request.urlretrieve(url, str(out))
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            declared = int(resp.headers.get("content-length", 0))
+            if declared > _MAX_DIRECT_BYTES:
+                raise ValueError(
+                    f"Remote file {declared} bytes exceeds {_MAX_DIRECT_BYTES} cap"
+                )
+            _stream_to_file(resp, out)
         return DownloadResult(path=str(out))
+
+    @staticmethod
+    def _fetch_text(url: str) -> str:
+        import urllib.request
+
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read().decode("utf-8", errors="replace")

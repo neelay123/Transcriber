@@ -44,12 +44,12 @@ class TranscriptionAgent:
         state.plan = {"url_type": url_type}
 
         log.info("Downloading (%s)...", url_type)
-        download = self._downloader.download(url)
+        download = self._downloader.download(url, preferred_lang=language)
 
-        # Shortcut: use existing captions if present
+        # Shortcut: pre-existing captions skip transcription entirely.
         if download.has_captions:
-            log.info("Using existing captions")
-            return _format_captions(download.captions, output_format)
+            log.info("Using existing captions (%d segments)", len(download.caption_segments))
+            return _format_segments(download.caption_segments, output_format)
 
         state.media_path = download.path
 
@@ -114,15 +114,3 @@ def _srt_ts(seconds: float) -> str:
 
 def _vtt_ts(seconds: float) -> str:
     return _srt_ts(seconds).replace(",", ".")
-
-
-def _format_captions(captions: dict, fmt: str) -> str:
-    # Best-effort: return first available language as plain text
-    for lang_data in captions.values():
-        if isinstance(lang_data, list) and lang_data:
-            entry = lang_data[0]
-            if isinstance(entry, dict) and "url" in entry:
-                import urllib.request
-                with urllib.request.urlopen(entry["url"]) as resp:
-                    return resp.read().decode("utf-8")
-    return ""

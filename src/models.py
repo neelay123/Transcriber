@@ -33,13 +33,20 @@ class Silence:
 
 @dataclass
 class DownloadResult:
-    path: str | None
+    """Outcome of a download attempt.
+
+    Invariant: exactly one of `path` or `caption_segments` is set.
+    - `path` set        → media downloaded, must be transcribed.
+    - `caption_segments` → pre-existing captions found, transcription skipped.
+    """
+
+    path: str | None = None
+    caption_segments: list[TranscriptSegment] | None = None
     metadata: dict = field(default_factory=dict)
-    captions: dict = field(default_factory=dict)
 
     @property
     def has_captions(self) -> bool:
-        return bool(self.captions)
+        return self.caption_segments is not None
 
 
 @dataclass
