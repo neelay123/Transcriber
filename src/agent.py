@@ -103,10 +103,12 @@ def _to_vtt(segments: list[TranscriptSegment]) -> str:
 
 
 def _srt_ts(seconds: float) -> str:
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    ms = int((seconds % 1) * 1000)
+    # Decompose from integer milliseconds so float noise can't cause
+    # off-by-one (e.g. 0.9995 → 1000ms, not truncated to 999ms).
+    ms_total = round(seconds * 1000)
+    h, ms_total = divmod(ms_total, 3_600_000)
+    m, ms_total = divmod(ms_total, 60_000)
+    s, ms = divmod(ms_total, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
-from pathlib import Path
 
 from src.models import AudioChunk, TranscriptSegment, TranscriptionResult
 
 _DUPLICATE_THRESHOLD = 0.8
+_MIN_RATIO_LEN = 5  # below this, SequenceMatcher ratio is unreliable
+_OVERLAP_EPSILON = 0.5  # seconds of slack when building the dedup lookback window
+
+
+def _word_tokens(text: str) -> set[str]:
+    return set(re.findall(r"\w+", text.lower()))
 
 
 def adjust_timestamps(
@@ -30,11 +35,20 @@ def is_near_duplicate(
     recent: list[TranscriptSegment],
     threshold: float = _DUPLICATE_THRESHOLD,
 ) -> bool:
-    needle = segment.text.lower()
+    a = segment.text.lower().strip()
+    if not a:
+        return False
+    a_tokens = _word_tokens(a)
+
     for candidate in recent:
-        ratio = SequenceMatcher(None, needle, candidate.text.lower()).ratio()
-        if ratio >= threshold:
+        b = candidate.text.lower().strip()
+        # Token-set equality: catches reorder + punctuation, safe for short text
+        if a_tokens and a_tokens == _word_tokens(b):
             return True
+        # Fuzzy ratio: only trust it when both strings are long enough
+        if len(a) >= _MIN_RATIO_LEN and len(b) >= _MIN_RATIO_LEN:
+            if SequenceMatcher(None, a, b).ratio() >= threshold:
+                return True
     return False
 
 
@@ -42,13 +56,23 @@ def merge_chunks(results: list[TranscriptionResult]) -> list[TranscriptSegment]:
     if not results:
         return []
 
+    # Defensive: callers may pass chunks out of order.
+    results = sorted(results, key=lambda r: r.chunk.start)
+
     merged: list[TranscriptSegment] = []
 
     for i, result in enumerate(results):
+        # Overlap region = anything before the furthest end of ANY preceding
+        # chunk, not just chunk i-1 (which may be empty / shorter).
+        prev_end = max((r.chunk.end for r in results[:i]), default=0.0)
         for segment in result.segments:
-            in_overlap = i > 0 and segment.start < results[i - 1].chunk.end
-            if in_overlap and is_near_duplicate(segment, merged[-5:]):
-                continue
+            if i > 0 and segment.start < prev_end:
+                window = [
+                    m for m in reversed(merged)
+                    if m.end >= segment.start - _OVERLAP_EPSILON
+                ][:10]
+                if window and is_near_duplicate(segment, window):
+                    continue
             merged.append(segment)
 
     merged.sort(key=lambda s: s.start)
@@ -68,9 +92,10 @@ class Transcriber:
         self._lock = threading.Lock()  # faster-whisper model is not thread-safe
 
     def detect_language(self, chunk: AudioChunk) -> str:
-        sample_path = _sample_audio(chunk.path, duration=30)
+        # No FFmpeg re-encode: audio is already 16 kHz mono PCM post-extract.
+        sample = _load_audio_sample(chunk.path, seconds=30)
         with self._lock:
-            _, info = self.model.transcribe(str(sample_path), language=None)
+            _, info = self.model.transcribe(sample, language=None)
         return info.language
 
     def transcribe_chunk(
@@ -104,31 +129,26 @@ class Transcriber:
         self,
         chunks: list[AudioChunk],
         language: str | None = None,
-        max_workers: int = 2,
     ) -> list[TranscriptSegment]:
         if not language:
             language = self.detect_language(chunks[0])
 
-        # Sequential execution — model lock makes parallelism pointless on single GPU.
-        # max_workers kept as param for future multi-GPU support.
+        # Sequential by design: the model lock serializes calls on a single GPU,
+        # so a thread pool here would add no parallelism. merge_chunks() sorts
+        # defensively, so input order does not matter.
         results = [self.transcribe_chunk(chunk, language) for chunk in chunks]
-        results.sort(key=lambda r: r.chunk.start)
         return merge_chunks(results)
 
 
-def _sample_audio(path: str, duration: int = 30) -> Path:
-    import subprocess
+def _load_audio_sample(path: str, seconds: int = 30, rate: int = 16000):
+    """Read up to `seconds` of audio as a float32 mono numpy array.
 
-    src = Path(path)
-    out = src.with_suffix(".sample.wav")
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-i", str(src),
-            "-t", str(duration),
-            "-ac", "1", "-ar", "16000",
-            str(out),
-        ],
-        check=True,
-        capture_output=True,
-    )
-    return out
+    Avoids an FFmpeg re-encode for language detection — the input is already
+    16 kHz mono PCM after AudioProcessor.extract_audio().
+    """
+    import soundfile as sf
+
+    arr, _ = sf.read(path, frames=seconds * rate, dtype="float32", always_2d=False)
+    if arr.ndim > 1:  # safety: collapse to mono if a stereo file slips through
+        arr = arr.mean(axis=1)
+    return arr

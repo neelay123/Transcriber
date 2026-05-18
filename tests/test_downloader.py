@@ -1,5 +1,70 @@
 import pytest
-from src.downloader import classify_url, is_media_url
+from src.downloader import classify_url, is_media_url, parse_vtt, parse_json3
+
+
+class TestParseVtt:
+    def test_basic_cue(self):
+        vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:03.500\nHello world\n"
+        segs = parse_vtt(vtt)
+        assert len(segs) == 1
+        assert segs[0].text == "Hello world"
+        assert segs[0].start == 1.0
+        assert segs[0].end == 3.5
+
+    def test_multi_line_cue_joined(self):
+        vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nline one\nline two\n"
+        segs = parse_vtt(vtt)
+        assert segs[0].text == "line one line two"
+
+    def test_strips_inline_tags(self):
+        vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n<c>Hello</c> <00:00:01.000>world\n"
+        segs = parse_vtt(vtt)
+        assert segs[0].text == "Hello world"
+
+    def test_skips_note_and_header_blocks(self):
+        vtt = "WEBVTT\n\nNOTE this is a comment\n\n00:00:01.000 --> 00:00:02.000\nReal text\n"
+        segs = parse_vtt(vtt)
+        assert len(segs) == 1
+        assert segs[0].text == "Real text"
+
+    def test_comma_millisecond_separator(self):
+        # Some SRT-ish exports use comma
+        vtt = "WEBVTT\n\n00:00:01,250 --> 00:00:02,750\nComma ts\n"
+        segs = parse_vtt(vtt)
+        assert segs[0].start == 1.25
+        assert segs[0].end == 2.75
+
+    def test_empty_returns_empty(self):
+        assert parse_vtt("WEBVTT\n\n") == []
+
+
+class TestParseJson3:
+    def test_basic_events(self):
+        data = {
+            "events": [
+                {"tStartMs": 1000, "dDurationMs": 2000, "segs": [{"utf8": "Hello "}, {"utf8": "world"}]},
+            ]
+        }
+        segs = parse_json3(data)
+        assert len(segs) == 1
+        assert segs[0].text == "Hello world"
+        assert segs[0].start == 1.0
+        assert segs[0].end == 3.0
+
+    def test_skips_empty_and_newline_only_events(self):
+        data = {
+            "events": [
+                {"tStartMs": 0, "dDurationMs": 500, "segs": [{"utf8": "\n"}]},
+                {"tStartMs": 500, "dDurationMs": 500, "segs": [{"utf8": "Real"}]},
+                {"tStartMs": 1000, "dDurationMs": 500},  # no segs key
+            ]
+        }
+        segs = parse_json3(data)
+        assert len(segs) == 1
+        assert segs[0].text == "Real"
+
+    def test_no_events_returns_empty(self):
+        assert parse_json3({}) == []
 
 
 class TestClassifyUrl:
