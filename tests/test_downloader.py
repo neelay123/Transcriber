@@ -3,6 +3,7 @@ import pytest
 from src.downloader import (
     classify_url,
     is_media_url,
+    is_media_response,
     parse_vtt,
     parse_json3,
     select_caption,
@@ -195,3 +196,26 @@ class TestIsMediaUrl:
 
     def test_audio_mp3_is_media(self):
         assert is_media_url("https://example.com/podcast.mp3")
+
+
+class TestIsMediaResponse:
+    def test_mp4_url_is_media(self):
+        assert is_media_response("https://x.com/v.mp4", "")
+
+    def test_m3u8_url_is_media(self):
+        assert is_media_response("https://x.com/p.m3u8?a=1", "")
+
+    def test_video_content_type_is_media(self):
+        assert is_media_response("https://x.com/stream", "video/mp4")
+
+    def test_hls_content_type_is_media(self):
+        assert is_media_response("https://x.com/s", "application/vnd.apple.mpegurl")
+
+    def test_audio_content_type_is_media(self):
+        assert is_media_response("https://x.com/a", "audio/mpeg; charset=utf-8")
+
+    def test_html_is_not_media(self):
+        assert not is_media_response("https://x.com/page", "text/html")
+
+    def test_json_is_not_media(self):
+        assert not is_media_response("https://x.com/api", "application/json")

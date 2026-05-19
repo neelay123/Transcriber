@@ -13,6 +13,20 @@ log = logging.getLogger(__name__)
 
 _VTT_TS = re.compile(r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})")
 _INLINE_TAG = re.compile(r"<[^>]+>")
+_MEDIA_URL_RE = re.compile(r"\.(mp4|m3u8|webm|mpd|m4a)(\?|$)", re.IGNORECASE)
+_MEDIA_CT_PREFIXES = ("video/", "audio/")
+_MEDIA_CT_EXACT = {
+    "application/vnd.apple.mpegurl",
+    "application/x-mpegurl",
+    "application/dash+xml",
+}
+
+
+def is_media_response(url: str, content_type: str) -> bool:
+    if _MEDIA_URL_RE.search(url or ""):
+        return True
+    ct = (content_type or "").split(";")[0].strip().lower()
+    return ct in _MEDIA_CT_EXACT or ct.startswith(_MEDIA_CT_PREFIXES)
 
 
 def parse_vtt(text: str) -> list[TranscriptSegment]:
