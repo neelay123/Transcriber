@@ -57,5 +57,4 @@ class AgentState:
     media_path: str | None = None
     chunks: list[AudioChunk] = field(default_factory=list)
     segments: list[TranscriptSegment] = field(default_factory=list)
-    errors: list[Exception] = field(default_factory=list)
     language: str | None = None
