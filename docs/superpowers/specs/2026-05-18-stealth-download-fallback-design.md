@@ -72,10 +72,20 @@ Pure helpers (unit-testable, no browser):
 - `cookies_to_netscape(cookies: list[dict], domain: str) -> str` —
   Playwright cookie dicts → Netscape `cookies.txt` text. Empty list →
   header-only file.
-- `classify_stealth_failure(capture, ytdlp_err) -> str` — returns
-  `"drm-protected"` (capture.drm_detected) | `"cloudflare-blocked"`
-  (no media + challenge marker) | `"no-media-found"` (default) |
-  `"browser-failed"` (fetch raised).
+- `classify_stealth_failure(capture, ytdlp_err) -> str` — returns one of
+  three values: `"drm-protected"` (`capture.drm_detected` is True);
+  `"cloudflare-blocked"` (no media URLs captured AND `capture.final_url`
+  still on a challenge path / page title contains "Just a moment" /
+  Cloudflare `cf-` cookie present); `"no-media-found"` (default).
+  `"browser-failed"` is NOT produced here — it is raised directly when
+  `fetch()` itself throws (see Data Flow), bypassing classification.
+
+DRM detection (`_StealthCapture.drm_detected`, set inside the hook) is
+driven by concrete sniffed-network signals: a request URL path containing
+`license`, `widevine`, or `playready`; OR a captured `.mpd` manifest whose
+body/headers indicate `cenc` / encrypted ContentProtection. No EME
+JavaScript introspection — network signals only, kept deterministic and
+testable.
 
 Refactor: add an optional `cookiefile_override: str | None = None`
 parameter to `_try_ytdlp` so Stage A can pass a transient cookiefile
@@ -129,9 +139,10 @@ passed as the `fetch()` timeout, caps the per-call runtime.
 - `fetch()` timeout / browser crash → `_StealthError("browser-failed")`.
 - Cloudflare unsolved → no media + unusable cookies →
   `"cloudflare-blocked"`.
-- DRM detected (license endpoints, `cenc`, EME markers in sniffed
-  network) → `"drm-protected"`. Explicitly unsupported; the error message
-  states this and includes a brief legal note.
+- DRM detected (license endpoint path / `cenc` / encrypted `.mpd`
+  ContentProtection in sniffed network — see Components) →
+  `"drm-protected"`. Explicitly unsupported; the error message states
+  this and includes a brief legal note.
 - No media, no usable cookies → `"no-media-found"`.
 - Final `RuntimeError` lists all three strategies plus the stealth reason.
 - The transient cookie file is written under `self.output_dir` and removed
