@@ -6,6 +6,7 @@ from src.downloader import (
     is_media_response,
     parse_vtt,
     parse_json3,
+    pick_best_media_url,
     select_caption,
     _stream_to_file,
 )
@@ -219,3 +220,23 @@ class TestIsMediaResponse:
 
     def test_json_is_not_media(self):
         assert not is_media_response("https://x.com/api", "application/json")
+
+
+class TestPickBestMediaUrl:
+    def test_prefers_m3u8_over_mp4(self):
+        assert pick_best_media_url(["https://a/v.mp4", "https://a/p.m3u8"]) == "https://a/p.m3u8"
+
+    def test_prefers_mp4_over_webm(self):
+        assert pick_best_media_url(["https://a/c.webm", "https://a/v.mp4"]) == "https://a/v.mp4"
+
+    def test_mpd_deprioritized_below_mp4(self):
+        assert pick_best_media_url(["https://a/m.mpd", "https://a/v.mp4"]) == "https://a/v.mp4"
+
+    def test_mpd_chosen_if_only_option(self):
+        assert pick_best_media_url(["https://a/m.mpd"]) == "https://a/m.mpd"
+
+    def test_empty_returns_none(self):
+        assert pick_best_media_url([]) is None
+
+    def test_no_media_extension_returns_none(self):
+        assert pick_best_media_url(["https://a/page.html"]) is None

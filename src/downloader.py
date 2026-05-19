@@ -29,6 +29,21 @@ def is_media_response(url: str, content_type: str) -> bool:
     return ct in _MEDIA_CT_EXACT or ct.startswith(_MEDIA_CT_PREFIXES)
 
 
+_MEDIA_PRIORITY = ("m3u8", "mp4", "webm", "mpd")
+
+
+def pick_best_media_url(urls: list[str]) -> str | None:
+    def rank(u: str) -> int:
+        m = re.search(r"\.(m3u8|mp4|webm|mpd)(\?|$)", u, re.IGNORECASE)
+        ext = m.group(1).lower() if m else ""
+        return _MEDIA_PRIORITY.index(ext) if ext in _MEDIA_PRIORITY else 99
+
+    if not urls:
+        return None
+    best = min(urls, key=rank)
+    return best if rank(best) < 99 else None
+
+
 def parse_vtt(text: str) -> list[TranscriptSegment]:
     """Parse well-formed WebVTT (manual subtitles) into segments.
 
