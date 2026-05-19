@@ -27,23 +27,24 @@ cp .env.example .env   # or edit .env directly
 ```python
 from src.agent import TranscriptionAgent
 
-agent = TranscriptionAgent(
-    model_size="large-v3",   # Whisper model
+with TranscriptionAgent(
+    model_size="large-v3",   # Whisper model (None = read WHISPER_MODEL_SIZE / default)
     device="auto",           # "cuda", "cpu", or "auto"
     compute_type="auto",     # "float16", "int8", or "auto"
     output_dir="./output",   # where downloads land
     cookies_file=None,       # path to cookies.txt for gated content
-)
-
-result = agent.transcribe(
-    url="https://www.youtube.com/watch?v=example",
-    language=None,           # None = auto-detect
-    output_format="text",    # "text" | "srt" | "vtt" | "json"
-)
-
-print(result)
-agent.cleanup()  # delete temp files
+) as agent:
+    result = agent.transcribe(
+        url="https://www.youtube.com/watch?v=example",
+        language=None,           # None = auto-detect
+        output_format="text",    # "text" | "srt" | "vtt" | "json"
+    )
+    print(result)
+# temp files removed automatically on context exit
 ```
+
+All constructor args are optional — omitted values fall back to the matching
+environment variable, then a built-in default.
 
 ### Output formats
 
@@ -56,7 +57,9 @@ agent.cleanup()  # delete temp files
 
 ## Configuration
 
-All options can be set via `.env` (loaded by your shell or a library like `python-dotenv`):
+A `.env` file in the working directory is loaded automatically at import
+(via `python-dotenv`). Explicit constructor args take precedence over env
+vars, which take precedence over defaults. Empty env values are treated as unset.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -65,7 +68,6 @@ All options can be set via `.env` (loaded by your shell or a library like `pytho
 | `WHISPER_COMPUTE_TYPE` | `auto` | `float16`, `int8_float16`, `int8`, or `auto` |
 | `OUTPUT_DIR` | system temp | Where downloads and audio chunks are written |
 | `COOKIES_FILE` | _(none)_ | Path to Netscape cookies file for age-gated content |
-| `LOG_LEVEL` | `INFO` | Python logging level |
 
 ## Architecture
 
