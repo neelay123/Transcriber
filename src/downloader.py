@@ -367,6 +367,9 @@ class VideoDownloader:
         cap = _StealthCapture()
         try:
             self._run_stealth_fetch(url, cap)
+        except ImportError as exc:
+            log.warning("scrapling not installed or browser binaries missing: %s", exc)
+            raise _StealthError("browser-failed") from exc
         except Exception as exc:
             raise _StealthError("browser-failed") from exc
 
@@ -397,7 +400,8 @@ class VideoDownloader:
                     if res is not None:
                         return res
                 except Exception as exc:
-                    ytdlp_err = exc
+                    if ytdlp_err is None:
+                        ytdlp_err = exc
 
         raise _StealthError(classify_stealth_failure(cap, ytdlp_err))
 

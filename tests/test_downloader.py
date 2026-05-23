@@ -442,6 +442,31 @@ class TestTryStealth:
         assert res.path == "/tmp/v.mp4"
         assert "https://x.com/best.m3u8" in calls
 
+    def test_stage_b_succeeds_after_stage_a_raises(self, tmp_path, monkeypatch):
+        d = _dl(tmp_path)
+
+        def fake_fetch(url, cap):
+            cap.cookies = [{"name": "s", "value": "1", "domain": "x.com"}]
+            cap.media_urls = ["https://x.com/best.m3u8"]
+
+        monkeypatch.setattr(d, "_run_stealth_fetch", fake_fetch)
+        calls = []
+
+        def fake_ytdlp(u, lang=None, cookiefile_override=None):
+            calls.append((u, cookiefile_override))
+            if cookiefile_override is not None:
+                raise RuntimeError("stage A yt-dlp failure")
+            if u.endswith(".m3u8"):
+                return DownloadResult(path="/tmp/v.mp4")
+            return None
+
+        monkeypatch.setattr(d, "_try_ytdlp", fake_ytdlp)
+        res = d._try_stealth("https://x.com/v")
+        assert res.path == "/tmp/v.mp4"
+        # Stage A was attempted with cookiefile, then Stage B without
+        assert any(cf is not None for _, cf in calls)
+        assert ("https://x.com/best.m3u8", None) in calls
+
     def test_drm_skips_stage_b_and_raises(self, tmp_path, monkeypatch):
         d = _dl(tmp_path)
 
