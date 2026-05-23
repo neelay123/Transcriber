@@ -515,7 +515,6 @@ class TestStealthInChain:
             cap.final_url = "https://x.com/cdn-cgi/challenge-platform"
 
         monkeypatch.setattr(d, "_run_stealth_fetch", fake_fetch)
-        monkeypatch.setattr(d, "_try_ytdlp", lambda *a, **k: None)
         with pytest.raises(RuntimeError) as e:
             d.download("https://x.com/v")
         assert "cloudflare-blocked" in str(e.value)
