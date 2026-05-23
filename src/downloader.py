@@ -44,6 +44,25 @@ def pick_best_media_url(urls: list[str]) -> str | None:
     return best if rank(best) < 99 else None
 
 
+def cookies_to_netscape(cookies: list[dict], domain: str) -> str:
+    lines = ["# Netscape HTTP Cookie File"]
+    for c in cookies:
+        d = c.get("domain") or domain
+        include_sub = "TRUE" if d.startswith(".") else "FALSE"
+        path = c.get("path") or "/"
+        secure = "TRUE" if c.get("secure") else "FALSE"
+        expiry = int(c.get("expires") or 0)
+        if expiry < 0:
+            expiry = 0
+        lines.append(
+            "\t".join(
+                [d, include_sub, path, secure, str(expiry),
+                 c.get("name", ""), c.get("value", "")]
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
 def parse_vtt(text: str) -> list[TranscriptSegment]:
     """Parse well-formed WebVTT (manual subtitles) into segments.
 

@@ -2,6 +2,7 @@ import io
 import pytest
 from src.downloader import (
     classify_url,
+    cookies_to_netscape,
     is_media_url,
     is_media_response,
     parse_vtt,
@@ -240,3 +241,31 @@ class TestPickBestMediaUrl:
 
     def test_no_media_extension_returns_none(self):
         assert pick_best_media_url(["https://a/page.html"]) is None
+
+
+class TestCookiesToNetscape:
+    def test_header_present(self):
+        out = cookies_to_netscape([], "example.com")
+        assert out.splitlines()[0] == "# Netscape HTTP Cookie File"
+
+    def test_empty_is_header_only(self):
+        assert cookies_to_netscape([], "example.com").strip() == "# Netscape HTTP Cookie File"
+
+    def test_cookie_line_fields(self):
+        cookies = [{
+            "name": "sid", "value": "abc", "domain": ".example.com",
+            "path": "/", "secure": True, "expires": 1893456000,
+        }]
+        line = cookies_to_netscape(cookies, "example.com").splitlines()[1]
+        parts = line.split("\t")
+        assert parts == [".example.com", "TRUE", "/", "TRUE", "1893456000", "sid", "abc"]
+
+    def test_missing_domain_uses_fallback(self):
+        line = cookies_to_netscape([{"name": "a", "value": "b"}], "fallback.com").splitlines()[1]
+        assert line.split("\t")[0] == "fallback.com"
+
+    def test_negative_expiry_clamped_to_zero(self):
+        line = cookies_to_netscape(
+            [{"name": "a", "value": "b", "domain": "x.com", "expires": -1}], "x.com"
+        ).splitlines()[1]
+        assert line.split("\t")[4] == "0"
