@@ -376,3 +376,22 @@ class TestMakeCaptureHook:
         _make_capture_hook(cap)(page)
         page.emit(_FakeResp("https://x.com/creative-commons-license", "text/html"))
         assert cap.drm_detected is False
+
+
+class TestYtdlpOpts:
+    def test_override_beats_instance_cookiefile(self, tmp_path):
+        from src.downloader import VideoDownloader
+        d = VideoDownloader(output_dir=str(tmp_path), cookies_file="/inst/c.txt")
+        opts = d._ytdlp_opts("/override/c.txt")
+        assert opts["cookiefile"] == "/override/c.txt"
+
+    def test_falls_back_to_instance_cookiefile(self, tmp_path):
+        from src.downloader import VideoDownloader
+        d = VideoDownloader(output_dir=str(tmp_path), cookies_file="/inst/c.txt")
+        opts = d._ytdlp_opts(None)
+        assert opts["cookiefile"] == "/inst/c.txt"
+
+    def test_no_cookiefile_key_when_none(self, tmp_path):
+        from src.downloader import VideoDownloader
+        d = VideoDownloader(output_dir=str(tmp_path))
+        assert "cookiefile" not in d._ytdlp_opts(None)

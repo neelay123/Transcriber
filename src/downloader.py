@@ -284,19 +284,25 @@ class VideoDownloader:
             f"All download strategies failed for {url}: {last_error}"
         ) from last_error
 
-    def _try_ytdlp(
-        self, url: str, preferred_lang: str | None = None
-    ) -> DownloadResult | None:
-        import yt_dlp
-
+    def _ytdlp_opts(self, cookiefile: str | None) -> dict:
         opts: dict = {
             "format": "bestaudio/best",
             "outtmpl": str(self.output_dir / "%(id)s.%(ext)s"),
             "quiet": True,
             "no_warnings": True,
         }
-        if self.cookies_file:
-            opts["cookiefile"] = self.cookies_file
+        cf = cookiefile or self.cookies_file
+        if cf:
+            opts["cookiefile"] = cf
+        return opts
+
+    def _try_ytdlp(
+        self, url: str, preferred_lang: str | None = None,
+        cookiefile_override: str | None = None,
+    ) -> DownloadResult | None:
+        import yt_dlp
+
+        opts = self._ytdlp_opts(cookiefile_override)
 
         with yt_dlp.YoutubeDL(opts) as ydl:
             # Probe first (no media download) so the caption shortcut can
