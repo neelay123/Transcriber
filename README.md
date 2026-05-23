@@ -16,6 +16,13 @@ Supports YouTube, Vimeo, Twitter/X, Instagram, TikTok, and direct media links (`
 pip install -r requirements-dev.txt
 ```
 
+The stealth download fallback uses Scrapling's headless browser. After
+installing requirements, fetch its browser binaries once:
+
+```bash
+scrapling install
+```
+
 Copy and configure the environment file:
 
 ```bash
@@ -96,7 +103,10 @@ All core logic (chunking, merging, deduplication, URL classification) is covered
 
 ## Supported sites
 
-yt-dlp supports [1000+ sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md). For sites yt-dlp cannot handle, the downloader falls back to direct URL fetch (works for bare `.mp4`/`.webm` links). Headless browser extraction is not yet implemented.
+yt-dlp supports [1000+ sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md). For sites yt-dlp cannot handle, the downloader falls back to direct URL fetch (works for bare `.mp4`/`.webm` links). A third strategy uses Scrapling's
+`StealthyFetcher` (headless browser) to defeat anti-bot pages, harvest
+cookies for a yt-dlp retry, then sniff the raw media URL. DRM-protected
+content is detected and reported, never bypassed.
 
 ## Known limitations
 

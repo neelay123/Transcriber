@@ -498,3 +498,24 @@ class TestTryStealth:
         with pytest.raises(_StealthError) as e:
             d._try_stealth("https://x.com/v")
         assert str(e.value) == "browser-failed"
+
+
+class TestStealthInChain:
+    def test_stealth_is_third_strategy(self, tmp_path):
+        d = _dl(tmp_path)
+        names = [s.__name__ for s in d._strategies()]
+        assert names == ["_try_ytdlp", "_try_direct_fetch", "_try_stealth"]
+
+    def test_stealth_reason_surfaces_in_runtime_error(self, tmp_path, monkeypatch):
+        d = _dl(tmp_path)
+        monkeypatch.setattr(d, "_try_ytdlp", lambda *a, **k: None)
+        monkeypatch.setattr(d, "_try_direct_fetch", lambda *a, **k: None)
+
+        def fake_fetch(url, cap):
+            cap.final_url = "https://x.com/cdn-cgi/challenge-platform"
+
+        monkeypatch.setattr(d, "_run_stealth_fetch", fake_fetch)
+        monkeypatch.setattr(d, "_try_ytdlp", lambda *a, **k: None)
+        with pytest.raises(RuntimeError) as e:
+            d.download("https://x.com/v")
+        assert "cloudflare-blocked" in str(e.value)

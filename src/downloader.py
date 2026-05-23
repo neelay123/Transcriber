@@ -265,21 +265,24 @@ class VideoDownloader:
         self.output_dir = Path(output_dir) if output_dir else Path(tempfile.gettempdir())
         self.cookies_file = cookies_file
 
+    def _strategies(self):
+        return [self._try_ytdlp, self._try_direct_fetch, self._try_stealth]
+
     def download(
         self, url: str, preferred_lang: str | None = None
     ) -> DownloadResult:
-        strategies = [self._try_ytdlp, self._try_direct_fetch]
         last_error: Exception | None = None
-
-        for strategy in strategies:
+        for strategy in self._strategies():
             try:
                 result = strategy(url, preferred_lang)
                 if result is not None:
                     return result
             except Exception as exc:
-                log.warning("Strategy %s failed for %s: %s", strategy.__name__, url, exc)
+                log.warning(
+                    "Strategy %s failed for %s: %s",
+                    strategy.__name__, url, exc,
+                )
                 last_error = exc
-
         raise RuntimeError(
             f"All download strategies failed for {url}: {last_error}"
         ) from last_error
