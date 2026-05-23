@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -61,6 +62,31 @@ def cookies_to_netscape(cookies: list[dict], domain: str) -> str:
             )
         )
     return "\n".join(lines) + "\n"
+
+
+STEALTH_TIMEOUT_MS = 60_000
+_CF_MARKERS = ("just a moment", "/cdn-cgi/challenge", "challenge-platform", "__cf_chl")
+
+
+class _StealthError(Exception):
+    """Stealth strategy failed; message is a classified reason string."""
+
+
+@dataclass
+class _StealthCapture:
+    cookies: list = field(default_factory=list)
+    media_urls: list = field(default_factory=list)
+    final_url: str = ""
+    drm_detected: bool = False
+
+
+def classify_stealth_failure(capture: "_StealthCapture", ytdlp_err) -> str:
+    if capture.drm_detected:
+        return "drm-protected"
+    final = (capture.final_url or "").lower()
+    if not capture.media_urls and any(m in final for m in _CF_MARKERS):
+        return "cloudflare-blocked"
+    return "no-media-found"
 
 
 def parse_vtt(text: str) -> list[TranscriptSegment]:

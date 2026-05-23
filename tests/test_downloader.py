@@ -1,7 +1,10 @@
 import io
 import pytest
 from src.downloader import (
+    _StealthCapture,
+    _StealthError,
     classify_url,
+    classify_stealth_failure,
     cookies_to_netscape,
     is_media_url,
     is_media_response,
@@ -269,3 +272,30 @@ class TestCookiesToNetscape:
             [{"name": "a", "value": "b", "domain": "x.com", "expires": -1}], "x.com"
         ).splitlines()[1]
         assert line.split("\t")[4] == "0"
+
+
+class TestClassifyStealthFailure:
+    def test_drm_flag_wins(self):
+        cap = _StealthCapture(drm_detected=True, final_url="https://x.com")
+        assert classify_stealth_failure(cap, None) == "drm-protected"
+
+    def test_cloudflare_when_blocked_and_no_media(self):
+        cap = _StealthCapture(final_url="https://x.com/cdn-cgi/challenge-platform/x")
+        assert classify_stealth_failure(cap, None) == "cloudflare-blocked"
+
+    def test_cloudflare_just_a_moment_title_marker(self):
+        cap = _StealthCapture(final_url="https://x.com/?__cf_chl=just a moment")
+        assert classify_stealth_failure(cap, None) == "cloudflare-blocked"
+
+    def test_no_media_default(self):
+        cap = _StealthCapture(final_url="https://x.com/video", media_urls=[])
+        assert classify_stealth_failure(cap, None) == "no-media-found"
+
+    def test_has_media_is_not_cloudflare(self):
+        cap = _StealthCapture(
+            final_url="https://x.com/cdn-cgi/challenge", media_urls=["https://x/v.mp4"]
+        )
+        assert classify_stealth_failure(cap, None) == "no-media-found"
+
+    def test_stealth_error_is_exception(self):
+        assert issubclass(_StealthError, Exception)
