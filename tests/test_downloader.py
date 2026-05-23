@@ -360,3 +360,19 @@ class TestMakeCaptureHook:
         page = _FakePage(cookies=[], url="https://x.com")
         _make_capture_hook(cap)(page)
         assert page.reloaded is True
+
+    def test_collects_media_url_via_content_type(self):
+        # URL has no media extension; content-type alone must be sufficient
+        cap = _StealthCapture()
+        page = _FakePage(cookies=[], url="https://x.com")
+        _make_capture_hook(cap)(page)
+        page.emit(_FakeResp("https://x.com/stream-no-ext", "video/mp4"))
+        assert "https://x.com/stream-no-ext" in cap.media_urls
+
+    def test_does_not_flag_creative_commons_license_as_drm(self):
+        # 'license' substring elsewhere in URL must NOT trigger DRM
+        cap = _StealthCapture()
+        page = _FakePage(cookies=[], url="https://x.com")
+        _make_capture_hook(cap)(page)
+        page.emit(_FakeResp("https://x.com/creative-commons-license", "text/html"))
+        assert cap.drm_detected is False

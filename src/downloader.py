@@ -89,7 +89,7 @@ def classify_stealth_failure(capture: "_StealthCapture", ytdlp_err) -> str:
     return "no-media-found"
 
 
-_DRM_PATH_RE = re.compile(r"(license|widevine|playready|/wv/|/pr/|cenc)", re.IGNORECASE)
+_DRM_PATH_RE = re.compile(r"/(license|widevine|playready|wv|pr|cenc)(/|\?|$)", re.IGNORECASE)
 
 
 def _make_capture_hook(capture: "_StealthCapture"):
@@ -114,8 +114,8 @@ def _make_capture_hook(capture: "_StealthCapture"):
         page.on("response", on_response)
         try:
             page.reload(wait_until="networkidle")
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("Stealth page.reload failed: %s", exc)
         try:
             capture.cookies = page.context.cookies()
         except Exception:
