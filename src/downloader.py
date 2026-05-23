@@ -349,6 +349,58 @@ class VideoDownloader:
             _stream_to_file(resp, out)
         return DownloadResult(path=str(out))
 
+    def _run_stealth_fetch(self, url: str, capture: "_StealthCapture") -> None:
+        from scrapling.fetchers import StealthyFetcher
+
+        StealthyFetcher.fetch(
+            url,
+            headless=True,
+            network_idle=True,
+            solve_cloudflare=True,
+            timeout=STEALTH_TIMEOUT_MS,
+            page_action=_make_capture_hook(capture),
+        )
+
+    def _try_stealth(
+        self, url: str, preferred_lang: str | None = None
+    ) -> DownloadResult | None:
+        cap = _StealthCapture()
+        try:
+            self._run_stealth_fetch(url, cap)
+        except Exception as exc:
+            raise _StealthError("browser-failed") from exc
+
+        ytdlp_err = None
+
+        # Stage A — cookie-augmented yt-dlp retry
+        if cap.cookies:
+            cf = self.output_dir / f"stealth_cookies_{abs(hash(url))}.txt"
+            cf.write_text(
+                cookies_to_netscape(cap.cookies, urlparse(url).netloc),
+                encoding="utf-8",
+            )
+            try:
+                res = self._try_ytdlp(
+                    url, preferred_lang, cookiefile_override=str(cf)
+                )
+                if res is not None:
+                    return res
+            except Exception as exc:
+                ytdlp_err = exc
+
+        # Stage B — sniffed raw media URL
+        if not cap.drm_detected:
+            best = pick_best_media_url(cap.media_urls)
+            if best:
+                try:
+                    res = self._try_ytdlp(best, preferred_lang)
+                    if res is not None:
+                        return res
+                except Exception as exc:
+                    ytdlp_err = exc
+
+        raise _StealthError(classify_stealth_failure(cap, ytdlp_err))
+
     @staticmethod
     def _fetch_text(url: str) -> str:
         import urllib.request

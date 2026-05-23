@@ -395,3 +395,81 @@ class TestYtdlpOpts:
         from src.downloader import VideoDownloader
         d = VideoDownloader(output_dir=str(tmp_path))
         assert "cookiefile" not in d._ytdlp_opts(None)
+
+
+from src.models import DownloadResult
+
+
+def _dl(output_dir):
+    from src.downloader import VideoDownloader
+    return VideoDownloader(output_dir=str(output_dir))
+
+
+class TestTryStealth:
+    def test_stage_a_cookies_then_ytdlp_success(self, tmp_path, monkeypatch):
+        d = _dl(tmp_path)
+
+        def fake_fetch(url, cap):
+            cap.cookies = [{"name": "s", "value": "1", "domain": "x.com"}]
+
+        monkeypatch.setattr(d, "_run_stealth_fetch", fake_fetch)
+        captured = {}
+
+        def fake_ytdlp(u, lang=None, cookiefile_override=None):
+            captured["cf"] = cookiefile_override
+            return DownloadResult(path="/tmp/a.m4a")
+
+        monkeypatch.setattr(d, "_try_ytdlp", fake_ytdlp)
+        res = d._try_stealth("https://x.com/v")
+        assert res.path == "/tmp/a.m4a"
+        assert captured["cf"] is not None  # transient cookiefile passed
+
+    def test_stage_b_media_url_when_stage_a_fails(self, tmp_path, monkeypatch):
+        d = _dl(tmp_path)
+
+        def fake_fetch(url, cap):
+            cap.media_urls = ["https://x.com/best.m3u8"]
+
+        monkeypatch.setattr(d, "_run_stealth_fetch", fake_fetch)
+        calls = []
+
+        def fake_ytdlp(u, lang=None, cookiefile_override=None):
+            calls.append(u)
+            return DownloadResult(path="/tmp/v.mp4") if u.endswith(".m3u8") else None
+
+        monkeypatch.setattr(d, "_try_ytdlp", fake_ytdlp)
+        res = d._try_stealth("https://x.com/v")
+        assert res.path == "/tmp/v.mp4"
+        assert "https://x.com/best.m3u8" in calls
+
+    def test_drm_skips_stage_b_and_raises(self, tmp_path, monkeypatch):
+        d = _dl(tmp_path)
+
+        def fake_fetch(url, cap):
+            cap.media_urls = ["https://x.com/v.mp4"]
+            cap.drm_detected = True
+
+        monkeypatch.setattr(d, "_run_stealth_fetch", fake_fetch)
+        monkeypatch.setattr(d, "_try_ytdlp", lambda *a, **k: None)
+        with pytest.raises(_StealthError) as e:
+            d._try_stealth("https://x.com/v")
+        assert str(e.value) == "drm-protected"
+
+    def test_no_media_raises_classified(self, tmp_path, monkeypatch):
+        d = _dl(tmp_path)
+        monkeypatch.setattr(d, "_run_stealth_fetch", lambda url, cap: None)
+        monkeypatch.setattr(d, "_try_ytdlp", lambda *a, **k: None)
+        with pytest.raises(_StealthError) as e:
+            d._try_stealth("https://x.com/v")
+        assert str(e.value) == "no-media-found"
+
+    def test_fetch_failure_is_browser_failed(self, tmp_path, monkeypatch):
+        d = _dl(tmp_path)
+
+        def boom(url, cap):
+            raise RuntimeError("browser crashed")
+
+        monkeypatch.setattr(d, "_run_stealth_fetch", boom)
+        with pytest.raises(_StealthError) as e:
+            d._try_stealth("https://x.com/v")
+        assert str(e.value) == "browser-failed"
