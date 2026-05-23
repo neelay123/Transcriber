@@ -13,6 +13,7 @@ from src.downloader import (
     pick_best_media_url,
     select_caption,
     _stream_to_file,
+    _make_capture_hook,
 )
 
 
@@ -299,3 +300,63 @@ class TestClassifyStealthFailure:
 
     def test_stealth_error_is_exception(self):
         assert issubclass(_StealthError, Exception)
+
+
+class _FakeResp:
+    def __init__(self, url, content_type=""):
+        self.url = url
+        self.headers = {"content-type": content_type}
+
+
+class _FakePage:
+    def __init__(self, cookies, url):
+        self._cb = None
+        self._cookies = cookies
+        self.url = url
+        self.reloaded = False
+
+        class _Ctx:
+            def __init__(self, c): self._c = c
+            def cookies(self): return self._c
+
+        self.context = _Ctx(cookies)
+
+    def on(self, event, cb):
+        assert event == "response"
+        self._cb = cb
+
+    def reload(self, **kwargs):
+        self.reloaded = True
+
+    def emit(self, resp):
+        self._cb(resp)
+
+
+class TestMakeCaptureHook:
+    def test_collects_media_urls(self):
+        cap = _StealthCapture()
+        page = _FakePage(cookies=[{"name": "a", "value": "b"}], url="https://x.com/v")
+        _make_capture_hook(cap)(page)
+        page.emit(_FakeResp("https://x.com/stream.m3u8"))
+        page.emit(_FakeResp("https://x.com/page", "text/html"))
+        assert cap.media_urls == ["https://x.com/stream.m3u8"]
+
+    def test_sets_drm_on_license_url(self):
+        cap = _StealthCapture()
+        page = _FakePage(cookies=[], url="https://x.com")
+        _make_capture_hook(cap)(page)
+        page.emit(_FakeResp("https://x.com/license/widevine"))
+        assert cap.drm_detected is True
+
+    def test_snapshots_cookies_and_url(self):
+        cap = _StealthCapture()
+        page = _FakePage(cookies=[{"name": "s", "value": "1"}], url="https://final.com/x")
+        _make_capture_hook(cap)(page)
+        assert cap.cookies == [{"name": "s", "value": "1"}]
+        assert cap.final_url == "https://final.com/x"
+
+    def test_reloads_to_capture_load_traffic(self):
+        cap = _StealthCapture()
+        page = _FakePage(cookies=[], url="https://x.com")
+        _make_capture_hook(cap)(page)
+        assert page.reloaded is True

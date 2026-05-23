@@ -89,6 +89,42 @@ def classify_stealth_failure(capture: "_StealthCapture", ytdlp_err) -> str:
     return "no-media-found"
 
 
+_DRM_PATH_RE = re.compile(r"(license|widevine|playready|/wv/|/pr/|cenc)", re.IGNORECASE)
+
+
+def _make_capture_hook(capture: "_StealthCapture"):
+    """Build a Scrapling page_action that captures media URLs + cookies.
+
+    Responses during the first navigation fire before page_action runs, so
+    we attach the listener then reload to observe the full media traffic.
+    """
+
+    def hook(page):
+        def on_response(resp):
+            url = getattr(resp, "url", "") or ""
+            try:
+                ct = resp.headers.get("content-type", "")
+            except Exception:
+                ct = ""
+            if _DRM_PATH_RE.search(url):
+                capture.drm_detected = True
+            if is_media_response(url, ct):
+                capture.media_urls.append(url)
+
+        page.on("response", on_response)
+        try:
+            page.reload(wait_until="networkidle")
+        except Exception:
+            pass
+        try:
+            capture.cookies = page.context.cookies()
+        except Exception:
+            capture.cookies = []
+        capture.final_url = getattr(page, "url", "") or ""
+
+    return hook
+
+
 def parse_vtt(text: str) -> list[TranscriptSegment]:
     """Parse well-formed WebVTT (manual subtitles) into segments.
 
